@@ -1,3 +1,5 @@
+The full blog post can be viewed here: https://someballparkfigures.wordpress.com/2020/04/28/how-we-evaluate-situational-pitching/
+
 For the sake of brevity, the part of the code related to obtaining and importing the raw data is omitted.
 
 More Information about the raw data: 
