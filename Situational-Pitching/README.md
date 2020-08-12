@@ -1,4 +1,4 @@
-For the sake of brevity, the part of the code related to obtaining and importing the raw data is omitted. Once the user 
+For the sake of brevity, the part of the code related to obtaining and importing the raw data is omitted.\n\n
 
 More Information about Raw Data: 
 -"Run Values 2019.ipynb" utilizes Retrosheet Play-by-Play data from 2019. 
