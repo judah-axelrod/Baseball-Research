@@ -1,0 +1,164 @@
+---
+title: "Situational Pitching to Contact Analysis"
+author: "Judah Axelrod"
+---
+
+Setup
+-Import libraries and multispread.R function; 
+-Connect to Statcast MySQL database with pitch-level data from 2008-2019
+-Import Fangraphs data on qualified pitcher ERA, FIP, and xFIP from 2015-2019
+(Setup Code partially hidden)
+
+```{r echo=FALSE,message = FALSE,warning=FALSE}
+library(tidyverse)
+library(RMySQL)
+library(ggpmisc)
+library(gridExtra)
+
+```
+
+1. Query database to obtain raw data (all pitches thrown from 2015-2019)
+2. Calculate K% and BB% for each pitcher and year, separately with runners on and bases empty
+3. Calculate K_diff and BB_diff (difference in K% or BB% for runners on vs. bases empty)
+4. For each pitcher and year, obtain K_diff and B_diff for both the current and previous year
+
+```{r message=FALSE,warning=FALSE}
+k_bb_annual_diffs <- function(sc_year){
+    query <- paste("
+    select distinct a.game_year, a.game_pk, a.pitcher, a.batter, a.at_bat_number, 
+      a.on_1b, a.on_2b, a.on_3b, a.outs_when_up, a.description, a.events,
+      a.bb_type, b.name_lahman
+    from sc_all as a left join playerids as b
+    on a.pitcher = b.mlbcode
+    where game_year =",sc_year,"and events != 'null';")
+    pitchers <- dbGetQuery(db, query)
+    
+
+
+    c0_pitchers <- pitchers %>%
+      mutate(runners_on = case_when(!is.na(on_1b) | !is.na(on_2b) | !is.na(on_3b) ~ 1,
+                                    TRUE ~ 0),
+             scoring_position = case_when(!is.na(on_2b) | !is.na(on_3b) ~ 1,
+                                          TRUE ~ 0))
+    
+    strikeouts_walks <- c0_pitchers %>%
+      filter(events %in% c("strikeout","strikeout_double_play","walk")) %>%
+      mutate(outcome = case_when(events == "walk" ~ "Walks",
+                                 TRUE ~ "Strikeouts")) %>%
+      count(game_year, name_lahman, outcome, runners_on)
+    
+    
+    strikeout_walk_pct <- c0_pitchers %>%
+      count(name_lahman, runners_on) %>%
+      rename(total_events = n) %>%
+      group_by(name_lahman) %>%
+      mutate(TBF = sum(total_events)) %>%
+      filter(TBF >= 100 & !is.na(name_lahman) & name_lahman != "NA NA") %>%
+      inner_join(strikeouts_walks, by = c("name_lahman","runners_on")) %>%
+      spread(key = "outcome", value = "n") %>%
+      multi_spread(key = "runners_on", value = c("total_events","Strikeouts","Walks")) %>%
+      mutate(k_pct_empty = `0_Strikeouts` / `0_total_events`,
+             k_pct_on = `1_Strikeouts` / `1_total_events`,
+             bb_pct_empty = `0_Walks` / `0_total_events`,
+             bb_pct_on = `1_Walks` / `1_total_events`,
+             k_diff = k_pct_on - k_pct_empty,
+             bb_diff = bb_pct_on - bb_pct_empty,
+             TBF = `0_total_events`+`1_total_events`) %>%
+      arrange(desc(k_diff))
+    
+    strikeout_walk_pct %>%
+      select(game_year, name_lahman, TBF, starts_with("k"), starts_with("bb"))
+    
+    }
+
+
+k_bb_diffs15 <- k_bb_annual_diffs(2015)
+k_bb_diffs16 <- k_bb_annual_diffs(2016)
+k_bb_diffs17 <- k_bb_annual_diffs(2017)
+k_bb_diffs18 <- k_bb_annual_diffs(2018)
+k_bb_diffs19 <- k_bb_annual_diffs(2019)
+                         
+k_bb_diffs_5yr <- rbind(k_bb_diffs15,k_bb_diffs16,k_bb_diffs17,k_bb_diffs18,k_bb_diffs19)
+
+
+k_bb_diffs_lag <- k_bb_diffs_5yr %>%
+  arrange(name_lahman, game_year) %>%
+  mutate(k_diff = 100*k_diff, bb_diff = 100*bb_diff,
+        lag_k_diff = case_when(name_lahman == lag(name_lahman) ~ lag(k_diff)),
+         lag_bb_diff = case_when(name_lahman == lag(name_lahman) ~ lag(bb_diff))) %>%
+  filter(!is.na(lag_bb_diff) & !is.na(lag_k_diff))
+
+```
+
+Plot Year 1 K_diff and BB_diff against Year 2 K_diff and BB_diff
+
+```{r message=FALSE,warning=FALSE}
+p1 = ggplot(k_bb_diffs_lag, aes(x = lag_k_diff, y = k_diff)) + geom_point(size=0.75,color='darkred') + geom_smooth(method='lm', formula= y~x, color='black') +
+  labs(x=expression('Year 1 K%'[diff]), y=expression('Year 2 K%'[diff])) + theme_bw()
+
+p2 = ggplot(k_bb_diffs_lag, aes(x = lag_bb_diff, y = bb_diff)) + geom_point(size=0.7,color='dodgerblue') + geom_smooth(method='lm', formula= y~x, color='black') +
+  labs(x=expression('Year 1 BB%'[diff]), y=expression('Year 2 BB%'[diff])) + theme_bw()
+
+grid.arrange(p1,p2,ncol=2)
+
+```               
+
+
+Look for all pitchers who had K_diff or BB_diff > 2.5% to examine further, and obtain their ERA, FIP, and xFIP for 2015-2019
+
+```{r message=FALSE,warning=FALSE}
+
+k_bb_diffs_agg <- k_bb_diffs_5yr %>%
+  group_by(name_lahman) %>%
+  summarize(N=n(), avg_k_diff = 100*mean(k_diff,na.rm=TRUE), 
+            avg_bb_diff = 100*mean(bb_diff,na.rm=TRUE)) %>%
+  filter(N>2 & (avg_k_diff > 2.5 | avg_bb_diff > 2.5)) %>%
+  arrange(desc(avg_k_diff))
+  
+c0_era_fip <- 
+  inner_join(k_bb_diffs_5yr,era_fip,by=c('name_lahman'='Name','game_year'='Season'))
+
+c0_era_fip_lim <- 
+  inner_join(k_bb_diffs_5yr,era_fip,by=c('name_lahman'='Name','game_year'='Season')) %>%
+  inner_join(k_bb_diffs_agg, by=c('name_lahman'))
+  
+era_fip_lag <- function(data){
+  data %>%
+    arrange(name_lahman, game_year) %>%
+    mutate(lag_ERA = case_when(name_lahman == lag(name_lahman) ~ lag(ERA)),
+           lag_FIP = case_when(name_lahman == lag(name_lahman) ~ lag(FIP)),
+           lag_xFIP = case_when(name_lahman == lag(name_lahman) ~ lag(xFIP))) %>%
+    filter(!is.na(lag_ERA) & !is.na(lag_FIP)) %>%
+    select(name_lahman, game_year, ERA, FIP, xFIP, lag_ERA, lag_FIP, lag_xFIP)
+} 
+c0_era_fip_lag <- era_fip_lag(c0_era_fip)
+c0_era_fip_lag_lim <- era_fip_lag(c0_era_fip_lim)
+
+```
+
+Plot Year 1 ERA, FIP, and xFIP against Year 2 for both All Qualified Pitchers and the subset found above
+
+```{r message=FALSE,warning=FALSE}
+p3 = ggplot(c0_era_fip_lag) + geom_point(aes(x=lag_ERA, y=ERA),color='darkred',size=0.5) + 
+  geom_smooth(aes(x=lag_ERA,y=ERA,color='ERA'),method='lm',se=F) +
+  geom_point(aes(x=lag_FIP, y=ERA),color='navyblue',size=0.5) +
+  geom_smooth(aes(x=lag_FIP, y=ERA,color='FIP'),method='lm',se=F) +
+  geom_point(aes(x=lag_xFIP, y=ERA),color='darkgrey',size=0.5,alpha=0.5) +
+  geom_smooth(aes(x=lag_xFIP, y=ERA,color='xFIP'),method='lm',se=F) + theme_bw() +
+  scale_color_manual(name='Legend',values=c('darkred','navyblue','darkgrey')) +
+  guides(color=F) +
+  labs(x='Year 1 ERA, FIP, xFIP',y='Year 2 ERA') +
+  ggtitle('All Qualified Pitchers') + theme(plot.title = element_text(face='bold',hjust = 0.5))
+p4 = ggplot(c0_era_fip_lag_lim) + geom_point(aes(x=lag_ERA, y=ERA),color='darkred',size=0.5) + 
+  geom_smooth(aes(x=lag_ERA,y=ERA,color='ERA'),method='lm',se=F) +
+  geom_point(aes(x=lag_FIP, y=ERA),color='navyblue',size=0.5) +
+  geom_smooth(aes(x=lag_FIP, y=ERA,color='FIP'),method='lm',se=F) + 
+  geom_point(aes(x=lag_xFIP, y=ERA),color='darkgrey',size=0.5,alpha=0.7) +
+  geom_smooth(aes(x=lag_xFIP, y=ERA,color='xFIP'),method='lm',se=F) + theme_bw() +
+  scale_color_manual(name='Legend',values=c('darkred','navyblue','darkgrey')) +
+  labs(x='Year 1 ERA, FIP, xFIP',y='Year 2 ERA') +
+  ggtitle('Situational Pitchers') + theme(legend.position = c(-0.05,0.8),legend.background=element_rect(linetype='solid',color='black'),
+                                            legend.title = element_text(face='bold'),plot.title = element_text(face='bold',hjust = 0.5))
+grid.arrange(p3,p4,ncol=2)
+
+```
