@@ -2,7 +2,7 @@ library(shiny)
 library(tidyverse)
 library(purrr)
 
-gumbo_df <- read_csv('~/Desktop/ST445/Project/2020finalproject-judah-axelrod/Pitch-Subtype-Analysis/RShiny_data.csv') %>%
+gumbo_df <- read_csv('Pitch-Subtype-Analysis/RShiny_data.csv') 
 subtypes <- sort(unique(gumbo_df$cluster))
 
 url_chooser <- function(subtype, seed=NA){
@@ -45,3 +45,5 @@ runApp(
     })
   })
 )
+
+runGitHub('Baseball-Research','judah-axelrod')
