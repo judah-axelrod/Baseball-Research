@@ -32,7 +32,7 @@ options <- map(data$url, function(x) x)
 options <- set_names(options, as.vector(data$type))
   
 
-# runApp(
+runApp(
   list(ui = fluidPage(
     selectInput('subtype', 'Choose a Pitch Subtype'
                 , options
@@ -44,6 +44,5 @@ options <- set_names(options, as.vector(data$type))
       tags$a(href = input$subtype, input$subtype)
     })
   })
-# )
+)
 
-runGitHub('Baseball-Research','judah-axelrod')
